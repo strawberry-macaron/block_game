@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>衣装が徐々に現れるブロック崩し</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: sans-serif;
+      background: #fff7fb;
+      color: #333;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      padding: 16px;
+    }
+
+    h1 {
+      margin: 8px 0;
+      font-size: 24px;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+      align-items: center;
+    }
+
+    button, input[type="file"] {
+      font-size: 14px;
+    }
+
+    button {
+      padding: 8px 12px;
+      border: none;
+      border-radius: 999px;
+      background: #ffb6d9;
+      cursor: pointer;
+    }
+
+    button:hover {
+      opacity: 0.9;
+    }
+
+    canvas {
+      background: white;
+      border: 2px solid #f4b6d2;
+      border-radius: 12px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+      max-width: 100%;
+      height: auto;
+    }
+
+    .info {
+      text-align: center;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .note {
+      background: #fff;
+      border: 1px solid #f0d3e2;
+      border-radius: 12px;
+      padding: 12px;
+      max-width: 820px;
+      width: 100%;
+      box-sizing: border-box;
+      line-height: 1.8;
+      font-size: 14px;
+    }
+
+    code {
+      background: #f8f0f5;
+      padding: 2px 6px;
+      border-radius: 6px;
+    }
+  </style>
+</head>
+<body>
+  <h1>キャラ画像ブロック崩し</h1>
+
+  <div class="controls">
+    <input type="file" id="imageInput" accept="image/*" />
+    <button id="startBtn">ゲーム開始</button>
+    <button id="resetBtn">リセット</button>
+    <button id="nextOutfitBtn">次の衣装を選ぶ</button>
+  </div>
+
+  <div class="info">
+    <div>左右キー ← → でバーを動かします</div>
+    <div>ブロックを壊すたびに、下にある衣装つき画像が見えていきます</div>
+    <div>最初にキャラクター画像を読み込んでください</div>
+  </div>
+
+  <canvas id="gameCanvas" width="700" height="1000"></canvas>
+
+  <div class="note">
+    <strong>衣装画像の置き場所</strong><br>
+    <code>image/kimono_clear.png</code><br>
+    <code>image/lolita_clear.png</code><br>
+    <code>image/onepiece_clear.png</code><br><br>
+    読み込む画像＝上に乗るブロック画像<br>
+    imageフォルダの画像＝下から現れる衣装画像
+  </div>
+
+  <script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+    const imageInput = document.getElementById("imageInput");
+    const startBtn = document.getElementById("startBtn");
+    const resetBtn = document.getElementById("resetBtn");
+    const nextOutfitBtn = document.getElementById("nextOutfitBtn");
+
+    const PADDING_TOP = 80;
+    const BLOCK_ROWS = 12;
+    const BLOCK_COLS = 6;
+    const BLOCK_GAP = 4;
+
+    let uploadedImage = null;      // 上に乗るブロック画像
+    let revealImage = null;        // 下から現れる衣装画像
+    let gameRunning = false;
+    let animationId = null;
+
+    let paddle, ball, blocks, leftPressed, rightPressed, score, gameClear, gameOver;
+
+    const outfits = [
+      { name: "着物", src: "image/kimono_clear.png" },
+      { name: "ロリータ", src: "image/lolita_clear.png" },
+      { name: "麦わら帽子と白ワンピース", src: "image/onepiece_clear.png" }
+    ];
+
+    let selectedOutfitIndex = 0;
+
+    function chooseRandomOutfit() {
+      selectedOutfitIndex = Math.floor(Math.random() * outfits.length);
+      revealImage = new Image();
+      revealImage.src = outfits[selectedOutfitIndex].src;
+    }
+
+    function initGame() {
+      paddle = {
+        width: 140,
+        height: 16,
+        x: canvas.width / 2 - 70,
+        y: canvas.height - 70,
+        speed: 10,
+      };
+
+      ball = {
+        x: canvas.width / 2,
+        y: canvas.height - 110,
+        radius: 12,
+        dx: 4,
+        dy: -4,
+      };
+
+      leftPressed = false;
+      rightPressed = false;
+      score = 0;
+      gameClear = false;
+      gameOver = false;
+
+      createBlocks();
+      draw();
+    }
+
+    function createBlocks() {
+      blocks = [];
+
+      const sideMargin = 30;
+      const usableWidth = canvas.width - sideMargin * 2;
+      const totalGapX = (BLOCK_COLS - 1) * BLOCK_GAP;
+      const blockWidth = (usableWidth - totalGapX) / BLOCK_COLS;
+      const blockHeight = 58;
+      const startX = sideMargin;
+
+      for (let r = 0; r < BLOCK_ROWS; r++) {
+        for (let c = 0; c < BLOCK_COLS; c++) {
+          const x = startX + c * (blockWidth + BLOCK_GAP);
+          const y = PADDING_TOP + r * (blockHeight + BLOCK_GAP);
+
+          blocks.push({
+            x,
+            y,
+            width: blockWidth,
+            height: blockHeight,
+            visible: true,
+            row: r,
+            col: c,
+          });
+        }
+      }
+    }
+
+    function drawRoundedRect(x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + w - r, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+      ctx.lineTo(x + w, y + h - r);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      ctx.lineTo(x + r, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+      ctx.lineTo(x, y + r);
+      ctx.quadraticCurveTo(x, y, x + r, y);
+      ctx.closePath();
+    }
+
+    // 下にある衣装画像を先に全面表示
+    function drawRevealImage() {
+      if (!revealImage || !revealImage.complete) return;
+
+      const drawX = 80;
+      const drawY = 110;
+      const drawW = 540;
+      const drawH = 780;
+
+      ctx.drawImage(revealImage, drawX, drawY, drawW, drawH);
+    }
+
+    // その上に、まだ残っているブロックだけを描く
+    function drawBlocks() {
+      const source = uploadedImage;
+      const srcW = source ? source.width : 1;
+      const srcH = source ? source.height : 1;
+      const partW = srcW / BLOCK_COLS;
+      const partH = srcH / BLOCK_ROWS;
+
+      blocks.forEach(block => {
+        if (!block.visible) return;
+
+        drawRoundedRect(block.x, block.y, block.width, block.height, 8);
+        ctx.save();
+        ctx.clip();
+
+        if (source) {
+          ctx.drawImage(
+            source,
+            block.col * partW,
+            block.row * partH,
+            partW,
+            partH,
+            block.x,
+            block.y,
+            block.width,
+            block.height
+          );
+        } else {
+          ctx.fillStyle = "#f7cde1";
+          ctx.fillRect(block.x, block.y, block.width, block.height);
+        }
+
+        ctx.restore();
+        ctx.strokeStyle = "rgba(255,255,255,0.9)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      });
+    }
+
+    function drawPaddle() {
+      ctx.fillStyle = "#ff78b4";
+      drawRoundedRect(paddle.x, paddle.y, paddle.width, paddle.height, 8);
+      ctx.fill();
+    }
+
+    function drawBall() {
+      ctx.beginPath();
+      ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+      ctx.fillStyle = "#7cc9ff";
+      ctx.fill();
+      ctx.closePath();
+    }
+
+    function drawText() {
+      ctx.fillStyle = "#555";
+      ctx.font = "18px sans-serif";
+      ctx.fillText(`Score: ${score}`, 20, 36);
+
+      if (revealImage) {
+        ctx.font = "18px sans-serif";
+        ctx.fillText(`衣装: ${outfits[selectedOutfitIndex].name}`, 540, 36);
+      }
+
+      if (!uploadedImage) {
+        ctx.fillStyle = "#777";
+        ctx.font = "20px sans-serif";
+        ctx.fillText("画像を読み込むと、ブロックがキャラ画像になります", 120, canvas.height / 2);
+      }
+
+      if (gameOver) {
+        ctx.fillStyle = "#ff4d6d";
+        ctx.font = "bold 42px sans-serif";
+        ctx.fillText("GAME OVER", canvas.width / 2 - 140, canvas.height / 2);
+      }
+
+      if (gameClear) {
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 38px sans-serif";
+        ctx.fillText("COMPLETE!", 220, 70);
+      }
+    }
+
+    function movePaddle() {
+      if (leftPressed) paddle.x -= paddle.speed;
+      if (rightPressed) paddle.x += paddle.speed;
+
+      if (paddle.x < 0) paddle.x = 0;
+      if (paddle.x + paddle.width > canvas.width) {
+        paddle.x = canvas.width - paddle.width;
+      }
+    }
+
+    function moveBall() {
+      ball.x += ball.dx;
+      ball.y += ball.dy;
+
+      if (ball.x - ball.radius < 0 || ball.x + ball.radius > canvas.width) {
+        ball.dx *= -1;
+      }
+
+      if (ball.y - ball.radius < 0) {
+        ball.dy *= -1;
+      }
+
+      if (
+        ball.y + ball.radius >= paddle.y &&
+        ball.x >= paddle.x &&
+        ball.x <= paddle.x + paddle.width &&
+        ball.dy > 0
+      ) {
+        ball.dy *= -1;
+
+        const hitPos = (ball.x - (paddle.x + paddle.width / 2)) / (paddle.width / 2);
+        ball.dx = hitPos * 6;
+      }
+
+      if (ball.y - ball.radius > canvas.height) {
+        gameOver = true;
+        gameRunning = false;
+      }
+    }
+
+    function collisionDetection() {
+      for (const block of blocks) {
+        if (!block.visible) continue;
+
+        if (
+          ball.x + ball.radius > block.x &&
+          ball.x - ball.radius < block.x + block.width &&
+          ball.y + ball.radius > block.y &&
+          ball.y - ball.radius < block.y + block.height
+        ) {
+          block.visible = false;
+          ball.dy *= -1;
+          score++;
+          break;
+        }
+      }
+
+      if (blocks.every(b => !b.visible)) {
+        gameClear = true;
+        gameRunning = false;
+      }
+    }
+
+    function drawBackground() {
+      const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      grad.addColorStop(0, "#fff8fc");
+      grad.addColorStop(1, "#ffeef7");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    function draw() {
+      drawBackground();
+
+      // まず下の衣装画像
+      drawRevealImage();
+
+      // 次に上のブロック
+      drawBlocks();
+
+      drawPaddle();
+      drawBall();
+      drawText();
+    }
+
+    function update() {
+      if (gameRunning) {
+        movePaddle();
+        moveBall();
+        collisionDetection();
+      }
+
+      draw();
+      animationId = requestAnimationFrame(update);
+    }
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowLeft") leftPressed = true;
+      if (e.key === "ArrowRight") rightPressed = true;
+    });
+
+    document.addEventListener("keyup", (e) => {
+      if (e.key === "ArrowLeft") leftPressed = false;
+      if (e.key === "ArrowRight") rightPressed = false;
+    });
+
+    imageInput.addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          uploadedImage = img;
+          initGame();
+        };
+        img.src = event.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+
+    startBtn.addEventListener("click", () => {
+      if (!uploadedImage) {
+        alert("先にキャラクター画像を読み込んでください。");
+        return;
+      }
+
+      chooseRandomOutfit();
+
+      if (!animationId) {
+        initGame();
+        gameRunning = true;
+        update();
+      } else {
+        if (gameOver || gameClear) initGame();
+        gameRunning = true;
+      }
+    });
+
+    resetBtn.addEventListener("click", () => {
+      initGame();
+      gameRunning = false;
+    });
+
+    nextOutfitBtn.addEventListener("click", () => {
+      chooseRandomOutfit();
+      draw();
+    });
+
+    chooseRandomOutfit();
+    initGame();
+  </script>
+</body>
+</html>
